@@ -1,5 +1,5 @@
 import { authenticate } from "../shopify.server";
-import { saveCollectionConfig } from "../models/saveCollectionConfig";
+import { postConfig } from "../models/saveCollectionConfig";
 
 export async function action({ request }) {
   const { admin } = await authenticate.admin(request);
@@ -14,7 +14,7 @@ export async function action({ request }) {
     });
   }
 
-  const success = await saveCollectionConfig(admin, collectionId, config);
+  const success = await postConfig(admin, collectionId, config);
 
   return new Response(JSON.stringify({ success }), {
     status: 200,

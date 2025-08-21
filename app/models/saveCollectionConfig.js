@@ -19,8 +19,10 @@ export async function postConfig(admin, collectionId, config) {
 
   if (errors || data?.metafieldsSet?.userErrors?.length > 0) {
     console.error("❌ Error al guardar config:", errors || data.metafieldsSet.userErrors);
+    console.log("dentro del if");
     return false;
   }
+    console.log("fuera del if");
 
   return true;
 }

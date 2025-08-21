@@ -21,14 +21,9 @@ export const GET_COLLECTION_PRODUCTS = `
               metafields(first: 5) {
                 edges {
                   node {
-                    namespace
                     key
-                    type
                     value
-                    definition {
-                      name
-                      description
-                    }
+                   
                   }
                 }
               }

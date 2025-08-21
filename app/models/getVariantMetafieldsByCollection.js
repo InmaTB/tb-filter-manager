@@ -1,35 +1,50 @@
-// models/getVariantMetafieldsByCollection.js
-import { request } from 'graphql-request';
-import dotenv from 'dotenv';
-import { GET_COLLECTION_PRODUCTS } from '../graphql/collections.js';
+import { request } from "graphql-request";
+import dotenv from "dotenv";
+import { GET_COLLECTION_PRODUCTS } from "../graphql/collections.js";
 
 dotenv.config();
 
 const SHOPIFY_ADMIN_API = `https://${process.env.SHOP}/admin/api/2024-04/graphql.json`;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 
-export async function getVariantMetafieldsByCollection(collectionId) {
-  const headers = {
-    'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-  };
+/**
+ * @param {string} collectionGid - Debe ser un GID: "gid://shopify/Collection/123..."
+ * @returns {Promise<Array<{ key: string, values: string[] }>>}
+ */
+export async function getVariantMetafieldsByCollection(collectionGid) {
+  const headers = { "X-Shopify-Access-Token": SHOPIFY_TOKEN };
 
-  const variables = {collectionId };
+  // Si tu query ya pagina productos/variantes, perfecto.
+  // Aquí hacemos una sola llamada tal cual la tienes.
+  const variables = { collectionId: collectionGid };
   const data = await request(SHOPIFY_ADMIN_API, GET_COLLECTION_PRODUCTS, variables, headers);
 
-  const collection = data.collection;
-  const EXCLUDED_KEYS = ['imagenes_variante'];
+  const collection = data?.collection;
+  if (!collection) return [];
 
-  const keys = new Map(); 
+  const acc = new Map(); // key -> Set(values)
 
-  for (const product of collection.products.nodes) {
-    for (const variant of product.variants.nodes) {
-      for (const edge of variant.metafields.edges) {
-        const { key } = edge.node;
-        if (EXCLUDED_KEYS.includes(key)) continue;
-        keys.set(key, key); 
+  for (const product of collection.products?.nodes || []) {
+    for (const variant of product.variants?.nodes || []) {
+      for (const edge of variant.metafields?.edges || []) {
+        const node = edge?.node;
+        if (!node) continue;
+        const { key, value } = node;
+        if (!key || value == null) continue;
+
+        if (!acc.has(key)) acc.set(key, new Set());
+        acc.get(key).add(String(value));
       }
     }
   }
 
-  return Array.from(keys.entries()).map(([key, name]) => ({ key, name }));
+  console.log("esto es acc", acc)
+
+  // Salida normalizada y ordenada
+  return Array.from(acc.entries()).map(([key, setValues]) => ({
+    key,
+    values: Array.from(setValues).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" })
+    ),
+  }));
 }

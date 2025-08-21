@@ -1,6 +1,7 @@
-import { request } from 'graphql-request';
-import dotenv from 'dotenv';
-import { GET_METAOBJECT_BY_COLLECTION_ID } from '../graphql/getFilterMf.js';
+//app.models.getCollectionFilterConfig.js
+import { request } from "graphql-request";
+import dotenv from "dotenv";
+import { GET_METAOBJECT_BY_COLLECTION_ID } from "../graphql/getFilterMf.js";
 
 dotenv.config();
 
@@ -9,20 +10,31 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 
 export async function getCollectionFilterConfig(collectionId) {
   const headers = {
-    'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+    "X-Shopify-Access-Token": SHOPIFY_TOKEN,
   };
 
-  const data = await request(SHOPIFY_ADMIN_API, GET_METAOBJECT_BY_COLLECTION_ID, {}, headers);
+  const variables = { collectionId };
+  console.log("estp es la variable",variables)
+
+  const data = await request(
+    SHOPIFY_ADMIN_API,
+    GET_METAOBJECT_BY_COLLECTION_ID,
+    variables,
+    headers,
+  );
 
   // Busca la colección específica por ID
-  const collection = data.collections.nodes.find((node) => node.id === collectionId);
+  const collection = data.collection;
 
   if (!collection || !collection.metafield?.value) {
-    console.log(`⛔ No hay configuración para la colección: ${collectionId}`);
     return { mostrar: [] };
   }
 
-  console.log("✅ Config encontrada para", collection.title, collection.metafield.value);
+  console.log(
+    "✅ Config encontrada para",
+    collection.title,
+    collection.metafield.value,
+  );
 
   try {
     return {

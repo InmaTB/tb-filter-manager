@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import {
-  Page, Layout, Card, Text, BlockStack, Button, ResourceList, ResourceItem, Spinner, Checkbox
+  Page,
+  Layout,
+  Card,
+  Text,
+  BlockStack,
+  Button,
+  ResourceList,
+  ResourceItem,
+  Spinner,
+  Checkbox,
 } from "@shopify/polaris";
 import { CheckIcon, ArrowLeftIcon } from "@shopify/polaris-icons";
 
@@ -14,7 +23,7 @@ export default function Index() {
   // 1. Cargar colecciones
   useEffect(() => {
     fetch("/api/admin/collections")
-      .then(res => res.json())
+      .then((res) => res.json())
       .then(setCollections);
   }, []);
 
@@ -22,19 +31,21 @@ export default function Index() {
   useEffect(() => {
     if (!selectedCollection) return;
 
-    console.log("colección seleccionada", selectedCollection.id);
-
     setLoading(true);
     Promise.all([
-      fetch(`/api/admin/variant-metafields?collectionId=${selectedCollection.id}`).then((res) => res.json()),
-      fetch(`/api/admin/collection-config?collectionId=${selectedCollection.id}`).then((res) => res.json())
+      fetch(
+        `/api/admin/variant-metafields?collectionId=${selectedCollection.id}`,
+      ).then((res) => res.json()),
+      fetch(
+        `/api/admin/collection-config?collectionId=${selectedCollection.id}`,
+      ).then((res) => res.json()),
     ])
       .then(([metafields, config]) => {
         setVariantMetafields(metafields);
 
         const selected = (config?.mostrar || [])
-          .filter(item => item.tipo === "metafield")
-          .map(item => item.key);
+          .filter((item) => item.tipo === "metafield")
+          .map((item) => `${item.namespace}.${item.key}`);
 
         setSelectedKeys(selected);
       })
@@ -44,19 +55,19 @@ export default function Index() {
   // 3. Cambiar selección
   const toggleKey = (key) => {
     setSelectedKeys((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
     );
   };
 
   // 4. Guardar configuración
   const saveConfig = async () => {
     const mostrar = variantMetafields
-      .filter(mf => selectedKeys.includes(mf.key))
-      .map(mf => ({
+      .filter((mf) => selectedKeys.includes(`${mf.namespace}.${mf.key}`))
+      .map((mf) => ({
         tipo: "metafield",
         namespace: mf.namespace,
         key: mf.key,
-        label: mf.name
+        label: mf.name,
       }));
 
     const res = await fetch(`/api/admin/collections/save-config`, {
@@ -64,13 +75,19 @@ export default function Index() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         collectionId: selectedCollection.id,
-        config: { mostrar }
-      })
+        config: { mostrar },
+      }),
     });
 
     const json = await res.json();
-    if (json.success) alert("Configuración guardada ✅");
-    else alert("Error al guardar ❌");
+    if (json.success)
+      shopify.toast.show("Fitros guardados", {
+        duration: 5000,
+      });
+    elseshopify.toast.show("Error al guardar", {
+      duration: 5000,
+      isError: true,
+    });
   };
 
   return (
@@ -80,7 +97,7 @@ export default function Index() {
           {!selectedCollection ? (
             <Card>
               <ResourceList
-                resourceName={{ singular: 'colección', plural: 'colecciones' }}
+                resourceName={{ singular: "colección", plural: "colecciones" }}
                 items={collections}
                 renderItem={(collection) => (
                   <ResourceItem
@@ -93,17 +110,17 @@ export default function Index() {
                         justifyContent: "space-between",
                         alignItems: "center",
                         width: "100%",
-                        cursor: "pointer"
+                        cursor: "pointer",
                       }}
-                      onClick={() => {
-                        console.log("click en", collection.title);
-                        setSelectedCollection(collection);
-                      }}
+                      onClick={() => setSelectedCollection(collection)}
                     >
                       <Text variant="bodyMd" fontWeight="medium">
                         {collection.title}
                       </Text>
-                      <Button variant="tertiary" onClick={() => setSelectedCollection(collection)}>
+                      <Button
+                        variant="tertiary"
+                        onClick={() => setSelectedCollection(collection)}
+                      >
                         Configurar
                       </Button>
                     </div>
@@ -117,24 +134,35 @@ export default function Index() {
                 <Spinner accessibilityLabel="Cargando filtros" size="large" />
               ) : (
                 <BlockStack gap="200">
-                  {variantMetafields.map((mf) => (
-                    <Checkbox
-                      key={mf.key}
-                      label={`${mf.name} (${mf.key})`}
-                      checked={selectedKeys.includes(mf.key)}
-                      onChange={() => toggleKey(mf.key)}
-                    />
-                  ))}
-                  <div>
-                    
-                  <Button icon={ArrowLeftIcon} onClick={() => setSelectedCollection(null)} variant="tertiary">
-                    Volver a colecciones
-                  </Button>
-                  <Button icon={CheckIcon} onClick={saveConfig} variant="primary">
-                    Guardar configuración
-                  </Button>
+                  {variantMetafields.map((mf) => {
+                    const key = `${mf.namespace}.${mf.key}`;
+                    return (
+                      <Checkbox
+                        key={key}
+                        label={`${mf.key}`}
+                        checked={selectedKeys.includes(key)}
+                        onChange={() => toggleKey(key)}
+                      />
+                    );
+                  })}
+                  <div
+                    style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}
+                  >
+                    <Button
+                      icon={ArrowLeftIcon}
+                      onClick={() => setSelectedCollection(null)}
+                      variant="tertiary"
+                    >
+                      Volver a colecciones
+                    </Button>
+                    <Button
+                      icon={CheckIcon}
+                      onClick={saveConfig}
+                      variant="primary"
+                    >
+                      Guardar configuración
+                    </Button>
                   </div>
-                  
                 </BlockStack>
               )}
             </Card>
