@@ -22,6 +22,7 @@ export async function loader({ request }) {
 
   try {
     const metafields = await getVariantMetafieldsByCollection(collectionId);
+    console.log("mf",metafields)
     return new Response(
       JSON.stringify(metafields),
       {

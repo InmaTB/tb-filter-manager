@@ -1,4 +1,4 @@
-export const GET_COLLECTIONS = `
+export const GET_COLLECTIONS = `#graphql
   query{
   collections(first:250){
     nodes{
@@ -9,23 +9,25 @@ export const GET_COLLECTIONS = `
 }
 `;
 
-
-export const GET_COLLECTION_PRODUCTS = `
-  query GetCollectionProducts($collectionId: ID!) {
+export const GET_COLLECTION_PRODUCTS_PAGE = `#graphql
+  query CollProds(
+    $collectionId: ID!,
+    $first: Int!,
+    $after: String,
+  ) {
     collection(id: $collectionId) {
-      products(first: 20) {
+      products(first: $first, after: $after) {
+        pageInfo { hasNextPage endCursor }
         nodes {
-          variants(first: 50) {
+          id
+          metafields(first:250) {
+            namespace key type value
+          }
+          variants(first: 100) {
             nodes {
               id
-              metafields(first: 5) {
-                edges {
-                  node {
-                    key
-                    value
-                   
-                  }
-                }
+              metafields(first:250) {
+                namespace key type value
               }
             }
           }

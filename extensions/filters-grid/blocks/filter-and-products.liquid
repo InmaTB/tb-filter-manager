@@ -2,16 +2,15 @@
 
 
 
-{% if config and config.mostrar %}
 <div style="display:flex;">
+{% if config and config.mostrar %}
+
   <form id="filters-form">
     {% for filtro in config.mostrar %}
       <fieldset id="fs-{{ filtro.key | escape }}">
         <legend>{{ filtro.label | default: filtro.key }}</legend>
 
-        {%- comment -%}
-        Aquí metemos las opciones (values) por JS después del fetch.
-        {%- endcomment -%}
+      
         <div class="options" data-key="{{ filtro.key | escape }}"></div>
       </fieldset>
     {% endfor %}
@@ -66,6 +65,74 @@
             </div>
 
 </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      const collectionId = "{{ collection.id }}";
+      const url = `/apps/tb-filter-manager/api/variant-metafields?collectionId=${encodeURIComponent(collectionId)}`;
+        
+      // Pasamos la config.mostrar al JS
+
+      const configured = {{ config.mostrar | json }};
+
+      // Helper seguro para seleccionar por atributo aunque la key tenga raros
+      const qsaByKey = (key) =>
+        document.querySelectorAll(`.options[data-key="${key.replace(/"/g, '\\"')}"]`);
+
+        console.log('prefetch')
+
+       try {
+        const res = await fetch(url, { credentials: 'same-origin' });
+                console.log("res",res)
+
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+          const text = await res.text();
+          console.error('Respuesta NO-JSON', res.status, text.slice(0, 600));
+          throw new Error(`Esperaba JSON y recibí ${ct} (status ${res.status})`);
+        }
+
+        
+
+        // data esperado: [{ key: "acabado", values: ["mate","brillo"] }, ...]
+        const data = await res.json();
+
+        console.log("data",data)
+        const byKey = new Map(data.map(({ key, values }) => [key, values]));
+
+        // Recorremos SOLO lo configurado en el metafield
+        configured.forEach(({ key, label }) => {
+          const containers = qsaByKey(String(key));
+          const values = byKey.get(key) || [];
+
+          containers.forEach(container => {
+            if (!values.length) {
+              container.innerHTML = '<small style="opacity:.7">Sin valores disponibles</small>';
+              return;
+            }
+
+            // Pintamos un checkbox por value
+            container.innerHTML = values.map(v => {
+              const valueStr = String(v);
+              const safeVal = valueStr.replace(/"/g, '&quot;');
+              const inputName = `${key}`; // si prefieres array en server: `${key}[]`
+              const id = `f-${key}-${valueStr}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+              return `
+                <label for="${id}" style="display:block; margin:.25rem 0;">
+                  <input id="${id}" type="checkbox" name="${inputName}" value="${safeVal}" />
+                  ${valueStr}
+                </label>
+              `;
+            }).join('');
+          });
+        });
+
+      } catch (err) {
+        console.error('Error al obtener/pintar metafields', err);
+      }
+      });
+    </script> 
 
 
 {% schema %}
