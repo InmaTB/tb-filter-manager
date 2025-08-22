@@ -19,7 +19,7 @@ export async function loader({ request }) {
   if (!/^gid:\/\//.test(collectionId)) {
     collectionId = `gid://shopify/Collection/${collectionId}`;
   }
-
+    console.log("prueba...")
   try {
     const metafields = await getVariantMetafieldsByCollection(collectionId);
     return new Response(
