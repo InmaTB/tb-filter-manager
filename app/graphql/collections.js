@@ -21,13 +21,17 @@ export const GET_COLLECTION_PRODUCTS_PAGE = `#graphql
         nodes {
           id
           metafields(first:250) {
-            namespace key type value
+            nodes {
+              namespace key type value
+            }
           }
           variants(first: 100) {
             nodes {
               id
               metafields(first:250) {
-                namespace key type value
+                nodes {
+                  namespace key type value
+                }
               }
             }
           }

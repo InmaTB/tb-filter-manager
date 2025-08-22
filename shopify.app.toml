@@ -3,7 +3,7 @@
 client_id = "459307d96259a1fe0fd3c8235f253c7b"
 name = "tb-filter-manager"
 handle = "tb-filter-manager"
-application_url = "https://alloy-guidance-margin-jersey.trycloudflare.com"
+application_url = "https://does-relay-charter-drove.trycloudflare.com"
 embedded = true
 
 [build]
@@ -27,9 +27,9 @@ scopes = "read_products,read_metaobjects,unauthenticated_read_product_listings,w
 
 [auth]
 redirect_urls = [
-  "https://alloy-guidance-margin-jersey.trycloudflare.com/auth/callback",
-  "https://alloy-guidance-margin-jersey.trycloudflare.com/auth/shopify/callback",
-  "https://alloy-guidance-margin-jersey.trycloudflare.com/api/auth/callback"
+  "https://does-relay-charter-drove.trycloudflare.com/auth/callback",
+  "https://does-relay-charter-drove.trycloudflare.com/auth/shopify/callback",
+  "https://does-relay-charter-drove.trycloudflare.com/api/auth/callback"
 ]
 
 [pos]

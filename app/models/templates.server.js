@@ -1,9 +1,8 @@
 // models/templates.server.js
 
-import { GET_COLLECTIONS, GET_COLLECTION_PRODUCTS_PAGE } from "../graphql/collections";
-import { GET_PRODUCT_AND_VARIANT_METAFIELDS, GET_MFDEFS_BY_IDS, METAFIELDS_SET} from "../graphql/metafields";
+import { GET_COLLECTIONS } from "../graphql/collections";
+import { GET_PRODUCT_AND_VARIANT_METAFIELDS, GET_MFDEFS_BY_IDS, METAFIELDS_SET } from "../graphql/metafields";
 import {
-  GET_TEMPLATE_DEFINITION,
   CREATE_TEMPLATE_DEFINITION,
   METAOBJECT_UPSERT,
   METAOBJECT_UPDATE,
@@ -13,26 +12,37 @@ import {
 } from "../graphql/templates";
 
 const TEMPLATE_TYPE = "$app:tb-filters-template";
-const toBool = (v) => String(v ?? "false").toLowerCase() === "true";
 
-// ====== NUEVO: constantes del metacampo de Colección ======
 const COLLECTION_FILTERS_NS = "tb-filters";
 const COLLECTION_FILTERS_KEY = "config";
 
-
-// ====== Helpers ======
-const asArr = (x) => Array.isArray(x) ? x : [];
+// ================================================
+//           UTILS
+// ================================================
+const toBool = (v) => String(v ?? "false").toLowerCase() === "true";
+const asArr = (x) => (Array.isArray(x) ? x : []);
 const isGid = (s, prefix) => typeof s === "string" && s.startsWith(prefix);
 
+// Uniq case-insensitive + orden local "es"
 function uniqSorted(arr) {
-  return [...new Set(asArr(arr).map(String))].filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, "es"));
+  const seen = new Set();
+  const out = [];
+  for (const raw of asArr(arr)) {
+    const s = String(raw).trim();
+    if (!s) continue;
+    const k = s.toLocaleLowerCase("es");
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(s);
+    }
+  }
+  return out.sort((a, b) => a.localeCompare(b, "es"));
 }
 
 // Normaliza el value de un metafield a lista de strings
 function explodeValue(mf) {
   if (!mf || mf.value == null) return [];
-  const t = mf.type || ""; // p.ej. "single_line_text_field", "list.single_line_text_field", "json"
+  const t = mf.type || "";
   const v = mf.value;
 
   if (t.startsWith("list.") || t === "json") {
@@ -74,13 +84,74 @@ async function getDefinitionsByIds(graphql, filtersIds) {
   };
 }
 
-// Calcula el mapa { "ns.key": ["val1","val2", ...] } para una colección
-async function computeCollectionFiltersMap(graphql, collectionId, prodDefs, varDefs) {
-  const prodIds = asArr(prodDefs).map((d) => ({ namespace: d.namespace, key: d.key }));
-  const varIds  = asArr(varDefs).map((d) => ({ namespace: d.namespace, key: d.key }));
+/**
+ * Builder de query: trae SOLO los metafields definidos en la template
+ * usando aliases estables (p_mf0, v_mf0, ...).
+ */
+function buildSelectedMfQuery(prodDefs = [], varDefs = [], pageSize = 50) {
+  const prodSel = prodDefs
+    .map(
+      (d, i) =>
+        `p_mf${i}: metafield(namespace: "${d.namespace}", key: "${d.key}") { namespace key type value }`
+    )
+    .join("\n");
 
-  // Si no hay defs, no hay nada que calcular
-  if (prodIds.length === 0 && varIds.length === 0) return {};
+  const varSel = varDefs
+    .map(
+      (d, i) =>
+        `v_mf${i}: metafield(namespace: "${d.namespace}", key: "${d.key}") { namespace key type value }`
+    )
+    .join("\n");
+
+  // Si un bloque queda vacío, incluimos un alias inofensivo para que el bloque no sea vacío.
+  const productBlock = prodSel ? prodSel : `__prodEmpty: id`;
+  const variantBlock = varSel ? varSel : `__varEmpty: id`;
+
+  const query = `#graphql
+    query CollProdsSelected($collectionId: ID!, $first: Int!, $after: String) {
+      collection(id: $collectionId) {
+        products(first: $first, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            ${productBlock}
+            variants(first: 100) {
+              nodes {
+                id
+                ${variantBlock}
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  // Mapas alias -> "ns.key"
+  const prodAlias = new Map(
+    prodDefs.map((d, i) => [`p_mf${i}`, `${d.namespace}.${d.key}`])
+  );
+  const varAlias = new Map(
+    varDefs.map((d, i) => [`v_mf${i}`, `${d.namespace}.${d.key}`])
+  );
+
+  return { query, prodAlias, varAlias, pageSize };
+}
+
+/**
+ * Calcula el mapa { "ns.key": ["v1","v2", ...] } trayendo SOLO los metafields
+ * seleccionados en la template (product + variant), usando la query con aliases.
+ */
+async function computeCollectionFiltersMapSelected(graphql, collectionId, prodDefs, varDefs) {
+  const hasProd = asArr(prodDefs).length > 0;
+  const hasVar = asArr(varDefs).length > 0;
+  if (!hasProd && !hasVar) return {};
+
+  const { query, prodAlias, varAlias, pageSize } = buildSelectedMfQuery(
+    prodDefs.map((d) => ({ namespace: d.namespace, key: d.key })),
+    varDefs.map((d) => ({ namespace: d.namespace, key: d.key })),
+    50
+  );
 
   const acc = new Map(); // "ns.key" -> Set(values)
   const push = (ns, key, values) => {
@@ -88,23 +159,16 @@ async function computeCollectionFiltersMap(graphql, collectionId, prodDefs, varD
     const k = `${ns}.${key}`;
     if (!acc.has(k)) acc.set(k, new Set());
     const set = acc.get(k);
-    asArr(values).forEach((v) => {
+    for (const v of asArr(values)) {
       const s = String(v || "").trim();
       if (s) set.add(s);
-    });
+    }
   };
 
   let after = null;
-  const FIRST = 50; // página de productos
   do {
-    const resp = await graphql(GET_COLLECTION_PRODUCTS_PAGE, {
-      variables: {
-        collectionId,
-        first: FIRST,
-        after,
-        prodIds,
-        varIds,
-      },
+    const resp = await graphql(query, {
+      variables: { collectionId, first: pageSize, after },
     });
     const json = await resp.json();
     const products = json?.data?.collection?.products;
@@ -112,14 +176,16 @@ async function computeCollectionFiltersMap(graphql, collectionId, prodDefs, varD
     after = pageInfo?.hasNextPage ? pageInfo.endCursor : null;
 
     for (const p of asArr(products?.nodes)) {
-      // product-level
-      for (const mf of asArr(p.metafields)) {
-        push(mf.namespace, mf.key, explodeValue(mf));
+      // Product-level: recorre los aliases generados
+      for (const [alias] of prodAlias) {
+        const mf = p?.[alias];
+        if (mf && mf.value != null) push(mf.namespace, mf.key, explodeValue(mf));
       }
-      // variant-level
+      // Variant-level: por cada variante, recorre los aliases
       for (const v of asArr(p.variants?.nodes)) {
-        for (const mf of asArr(v.metafields)) {
-          push(mf.namespace, mf.key, explodeValue(mf));
+        for (const [alias] of varAlias) {
+          const mf = v?.[alias];
+          if (mf && mf.value != null) push(mf.namespace, mf.key, explodeValue(mf));
         }
       }
     }
@@ -138,7 +204,7 @@ async function writeCollectionFiltersJson(graphql, collectionId, filtersMap) {
         {
           ownerId: collectionId,
           namespace: COLLECTION_FILTERS_NS,
-          key: COLLECTION_FILTERS_KEY, // "filters"
+          key: COLLECTION_FILTERS_KEY, // "config"
           type: "json",
           value: JSON.stringify(filtersMap || {}),
         },
@@ -155,7 +221,7 @@ async function writeCollectionFiltersJson(graphql, collectionId, filtersMap) {
 }
 
 // ================================================
-//           TUS FUNCIONES EXISTENTES
+//           EXPORTS
 // ================================================
 export async function getTemplates(graphql, opts = {}) {
   await ensureTemplateDefinition(graphql);
@@ -185,8 +251,8 @@ export async function saveTemplate(graphql, id, templateJSONString) {
   const template = JSON.parse(templateJSONString || "{}");
   const {
     title = "",
-    collectionIds = [],     // GIDs de Collection
-    filtersIds = [],        // GIDs de MetafieldDefinition
+    collectionIds = [], // GIDs de Collection
+    filtersIds = [], // GIDs de MetafieldDefinition
     active = true,
   } = template;
 
@@ -194,10 +260,10 @@ export async function saveTemplate(graphql, id, templateJSONString) {
 
   // --- upsert/update del metaobjeto (tal como tenías) ---
   const fields = [
-    { key: "title",       value: String(title) },
+    { key: "title", value: String(title) },
     { key: "collections", value: JSON.stringify(collectionIds) },
-    { key: "filters",     value: JSON.stringify(filtersIds) },
-    { key: "active",      value: String(!!active) },
+    { key: "filters", value: JSON.stringify(filtersIds) },
+    { key: "active", value: String(!!active) },
   ];
 
   let upsertedOrUpdated = null;
@@ -211,18 +277,17 @@ export async function saveTemplate(graphql, id, templateJSONString) {
     if (errs?.length) return { errors: errs };
     upsertedOrUpdated = json?.data?.metaobjectUpdate?.metaobject;
   } else {
-    const normalized =
-      String(title || "untitled")
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
+    const normalized = String(title || "untitled")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
     const handleValue = id === "0" ? `tpl-${Date.now()}-${normalized}` : `tpl-${id}`;
 
     const resp = await graphql(METAOBJECT_UPSERT, {
       variables: {
         handle: { type: TEMPLATE_TYPE, handle: handleValue },
-        input:  { fields },
+        input: { fields },
       },
     });
     const json = await resp.json();
@@ -233,8 +298,10 @@ export async function saveTemplate(graphql, id, templateJSONString) {
 
   // --- NUEVO: calcular y guardar filtros por colección ---
   // 1) Resuelve definiciones seleccionadas
-  const { product: prodDefs, variant: varDefs } =
-    await getDefinitionsByIds(graphql, filtersIds);
+  const { product: prodDefs, variant: varDefs } = await getDefinitionsByIds(
+    graphql,
+    filtersIds
+  );
 
   // 2) Recorre colecciones y escribe el JSON de filtros disponibles
   const cleanCollectionIds = asArr(collectionIds).filter((gid) =>
@@ -247,12 +314,15 @@ export async function saveTemplate(graphql, id, templateJSONString) {
       await writeCollectionFiltersJson(graphql, collId, {});
       continue;
     }
-    const filtersMap = await computeCollectionFiltersMap(
+
+    // Usar versión "selected" (solo metafields de template)
+    const filtersMap = await computeCollectionFiltersMapSelected(
       graphql,
       collId,
       prodDefs,
       varDefs
     );
+
     await writeCollectionFiltersJson(graphql, collId, filtersMap);
   }
 
@@ -273,7 +343,7 @@ export async function getAllFilters(graphql) {
   return buildSectionedOptions(productDefs, variantDefs);
 }
 
-function mapDefsToOptions(defs, ownerType) {
+function mapDefsToOptions(defs) {
   return (defs ?? []).map((d) => ({
     value: d.id,
     label: `${d.name} — ${d.namespace}.${d.key}`,
@@ -292,10 +362,10 @@ async function ensureTemplateDefinition(graphql) {
     name: "TB Filters Templates",
     type: TEMPLATE_TYPE,
     fieldDefinitions: [
-      { key: "title",       name: "Title",       type: "single_line_text_field" },
+      { key: "title", name: "Title", type: "single_line_text_field" },
       { key: "collections", name: "Collections", type: "list.collection_reference" },
-      { key: "filters",     name: "Filters",     type: "json" },
-      { key: "active",      name: "Active",      type: "boolean" },
+      { key: "filters", name: "Filters", type: "json" },
+      { key: "active", name: "Active", type: "boolean" },
     ],
     access: {
       admin: "MERCHANT_READ_WRITE",
