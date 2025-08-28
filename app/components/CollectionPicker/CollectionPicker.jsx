@@ -14,6 +14,7 @@ export function CollectionPicker({
   collections = [],
   buttonText = "Select collections",
 }) {
+
   // Normaliza ID para evitar mismatches (GID vs numérico)
   const norm = (id) => (id ? String(id) : "");
   const toKey = (id) => {

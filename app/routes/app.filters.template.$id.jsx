@@ -2,7 +2,7 @@ import {
   Page,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
-import { getAllCollections, getAllFilters, saveTemplate, } from "../models/templates.server";
+import { getAllCollections, getAllFilters, getTemplates, saveTemplate, } from "../models/templates.server";
 import { useActionData, useNavigate, useNavigation, useLoaderData, redirect  } from "@remix-run/react";
 import { TemplateForm } from "../components/TemplateForm/TemplateForm";
 
@@ -22,7 +22,16 @@ export const loader = async ({ request, params }) => {
     };
 
   } else  {
-    // initialData
+    const [tpl] = await getTemplates(admin.graphql, { id: params.id });
+    if (!tpl) {
+      throw new Response("Plantilla no encontrada", { status: 404 });
+    }
+    initialData = {
+      title: tpl.title ?? "",
+      collectionIds: (tpl.collections || []).map((c) => c.id),
+      filtersIds: tpl.filtersIds || [],
+      active: !!tpl.active,
+    };
   }
  
   return {initialData, collections, filters};
@@ -35,9 +44,6 @@ export const action = async ({ request, params }) => {
   if (!templateData || typeof templateData !== "string")
     throw new Error("No template data provided");
 
-
-  console.log('templateData', templateData)
-
   const result = await saveTemplate(admin.graphql, params.id,  templateData);
 
   if (result.errors?.length > 0) {
@@ -45,7 +51,6 @@ export const action = async ({ request, params }) => {
   }
 
   return redirect("/app/filters/templates");
-
 }
 
 export default function FiltersTemplatesForm() {
@@ -56,24 +61,22 @@ export default function FiltersTemplatesForm() {
   const submitErrors = actionData?.errors || [];
   const navigate = useNavigate();
 
+  return (
+      <Page>
+          <ui-title-bar title="Crear">
+              <button variant="breadcrumb" onClick={() => navigate("/app/filters/templates")}>
+                  Plantillas de filtros
+              </button>
+          </ui-title-bar>
 
-
-    return (
-        <Page>
-            <ui-title-bar title="Crear">
-                <button variant="breadcrumb" onClick={() => navigate("/app/filters/templates")}>
-                    Plantillas de filtros
-                </button>
-            </ui-title-bar>
-
-            <TemplateForm
-                initialData={initialData}
-                collections={collections}
-                filters={filters}
-                isLoading={isLoading}
-                submitErrors={submitErrors}
-                success={actionData?.success}
-            />
-        </Page>
-    );
+          <TemplateForm
+              initialData={initialData}
+              collections={collections}
+              filters={filters}
+              isLoading={isLoading}
+              submitErrors={submitErrors}
+              success={actionData?.success}
+          />
+      </Page>
+  );
 }
