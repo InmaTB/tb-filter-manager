@@ -2,63 +2,90 @@ import { unauthenticated } from "../shopify.server";
 
 export async function filterCollection(shop, collectionId, params) {
     
-    const { storefront } = await unauthenticated.storefront(shop);
+  const { storefront } = await unauthenticated.storefront(shop);
 
-    const {
-        productMetafields,
-        variantMetafields,
-        nativeFilters
-    } = classifyFilters(params);
-console.log('aaaa')
-  
+  const {
+      productMetafields,
+      variantMetafields,
+      nativeFilters
+  } = classifyFilters(params);
+
+  const { 
+    expectedProductMetafields, 
+    expectedVariantMetafields 
+  } = extractExpectedMetafields(params);
+
+  let products;
+  try {
     const query = buildCollectionQuery(collectionId, productMetafields, variantMetafields);
     const response = await storefront.graphql(query);
-
-    
-    console.log('bbbb')
     const result = await response.json();
+    products = result?.data?.collection?.products?.nodes ?? [];
+  } catch (error) {
+    console.error('Error en query:', error);
+  }
+  
+  if (!products) return false;    
 
-    const products = result?.data?.collection?.products?.nodes ?? [];
+  try {
+    const hasProductMetafields = expectedProductMetafields.length > 0;
+    const hasVariantMetafields = expectedVariantMetafields.length > 0;
+    const hasVendorFilter = nativeFilters.vendor !== null;
+    const hasAvailabilityFilter = nativeFilters.availability !== null;
+    const hasPriceFilter = nativeFilters.price.gte !== undefined || nativeFilters.price.lte !== undefined;
 
-    const expectedProductMetafields = [];
-    const expectedVariantMetafields = [];
+    const hasAnyFilter = hasProductMetafields || hasVariantMetafields || hasVendorFilter || hasAvailabilityFilter || hasPriceFilter;
 
-    console.log('cccc')
-    for (const [key, value] of params.entries()) {
-        console.log('dddd')
-        if (key.startsWith('filter.p.')) {
-        const [, , namespace, mfKey] = key.split('.');
-        expectedProductMetafields.push({
-            namespace,
-            key: mfKey,
-            values: [value].flat()
-        });
-        }
-        if (key.startsWith('filter.v.')) {
-        const [, , namespace, mfKey] = key.split('.');
-        expectedVariantMetafields.push({
-            namespace,
-            key: mfKey,
-            values: [value].flat()
-        });
-        }
+    if (!hasAnyFilter) {
+      return products;
     }
-console.log('eeee')
-try {
-        const filtered = products.filter((product) => {
-        const productOK = metafieldMatches(product.metafields, expectedProductMetafields);
 
-        const variantOK = expectedVariantMetafields.length === 0
-            ? true
-            : product.variants.nodes.some((variant) =>
-                metafieldMatches(variant.metafields, expectedVariantMetafields)
-            );
+    const filtered = products.filter((product) => {
+      const productMetafieldsArray = extractMetafieldsFromObject(product);
+      const productOK = hasProductMetafields
+        ? metafieldMatches(productMetafieldsArray, expectedProductMetafields)
+        : true;
 
-        return productOK && variantOK;
+        console.log('productOK',productOK)
+        console.log('hasProductMetafields',hasProductMetafields)
+        console.log('product.metafields',product.metafields)
+        console.log('expectedProductMetafields',expectedProductMetafields)
+
+      let variantOK;
+
+      if (hasAvailabilityFilter && nativeFilters.availability === false) {
+        // Filtro "no disponible": todas las variantes NO deben estar disponibles
+        variantOK = product.variants.nodes.every(variant => !isVariantAvailable(variant));
+      } else {
+        // Filtro "disponible" o sin filtro de disponibilidad
+        variantOK = product.variants.nodes.some((variant) => {
+          const variantMetafieldsArray = extractMetafieldsFromObject(variant);
+          const variantMetafieldsOK = hasVariantMetafields
+            ? metafieldMatches(variantMetafieldsArray, expectedVariantMetafields)
+            : true;
+
+          const availabilityOK = hasAvailabilityFilter
+            ? nativeFilters.availability
+              ? isVariantAvailable(variant) // variante disponible
+              : true // ya cubrimos no disponibles arriba
+            : true;
+
+          const price = parseFloat(variant.price?.amount ?? 0);
+          const priceGTE = nativeFilters.price.gte ?? -Infinity;
+          const priceLTE = nativeFilters.price.lte ?? Infinity;
+          const priceOK = price >= priceGTE && price <= priceLTE;
+
+          return variantMetafieldsOK && availabilityOK && priceOK;
+        });
+      }
+
+      const vendorOK = hasVendorFilter
+        ? product.vendor === nativeFilters.vendor
+        : true;
+
+      return productOK && variantOK && vendorOK;
     });
-
-        console.log('ffff')
-    console.log(filtered)
+    console.log('filtered.length', filtered.length)
     // 🔽 Devuelve solo un array de IDs de producto
     return filtered;
 } catch (error) {
@@ -78,17 +105,36 @@ try {
 function classifyFilters(params) {
   const productMetafields = new Set();
   const variantMetafields = new Set();
-  const nativeFilters = {};
+  const nativeFilters = {
+    vendor: null,
+    availability: null,
+    price: {}
+  };
 
   for (const [key, value] of params.entries()) {
-    if (key.startsWith('filter.p.')) {
+    // Metacampos de producto
+    if (key.startsWith('filter.p.') && key.split('.').length === 4) {
       const [, , namespace, metafieldKey] = key.split('.');
       productMetafields.add({ namespace, key: metafieldKey });
-    } else if (key.startsWith('filter.v.')) {
+    
+    // Metacampos de variante
+    } else if (key.startsWith('filter.v.') && key.split('.').length === 4) {
       const [, , namespace, metafieldKey] = key.split('.');
       variantMetafields.add({ namespace, key: metafieldKey });
-    } else {
-      nativeFilters[key] = value;
+
+    // Vendor
+    } else if (key === 'filter.p.vendor') {
+      nativeFilters.vendor = value;
+
+    // Availability
+    } else if (key === 'filter.v.availability') {
+      nativeFilters.availability = value === 'true';
+
+    // Price filters
+    } else if (key === 'filter.v.price.gte') {
+      nativeFilters.price.gte = parseFloat(value);
+    } else if (key === 'filter.v.price.lte') {
+      nativeFilters.price.lte = parseFloat(value);
     }
   }
 
@@ -99,20 +145,50 @@ function classifyFilters(params) {
   };
 }
 
-function metafieldFragment(metafields) {
-  if (metafields.length === 0) return '';
+function extractExpectedMetafields(params) {
+  const expectedProductMetafields = [];
+  const expectedVariantMetafields = [];
 
-  const identifiers = metafields.map(
-    ({ namespace, key }) => `{ namespace: "${namespace}", key: "${key}" }`
+  for (const [key, value] of params.entries()) {
+    if (key.startsWith('filter.p.')) {
+      const [, , namespace, mfKey] = key.split('.');
+      expectedProductMetafields.push({
+        namespace,
+        key: mfKey,
+        values: [value].flat()
+      });
+    }
+    if (key.startsWith('filter.v.')) {
+      const [, , namespace, mfKey] = key.split('.');
+      expectedVariantMetafields.push({
+        namespace,
+        key: mfKey,
+        values: [value].flat()
+      });
+    }
+  }
+
+  return { expectedProductMetafields, expectedVariantMetafields };
+}
+
+function isVariantAvailable(variant) {
+  const permitePedidos = variant.v_mfpermite?.value === true;
+  return variant.quantityAvailable > 0 || permitePedidos;
+}
+
+function metafieldFragment(metafieldsArray) {
+  if (!metafieldsArray.length) return "";
+
+  const uniqueRequests = new Set(
+    metafieldsArray.map(({ namespace, key }) => `${namespace}___${key}`)
   );
 
-  return `
-    metafields(identifiers: [${identifiers.join(',')}]) {
-      namespace
-      key
-      value
-    }
-  `;
+  return [...uniqueRequests]
+    .map((entry, index) => {
+      const [namespace, key] = entry.split("___");
+      return `mf_${index}: metafield(namespace: "${namespace}", key: "${key}") { value namespace key }`;
+    })
+    .join("\n");
 }
 
 function buildCollectionQuery(collectionId, productMetafields, variantMetafields) {
@@ -149,9 +225,6 @@ function buildCollectionQuery(collectionId, productMetafields, variantMetafields
                 v_mfpermite: metafield(namespace: "upng", key: "permite_pedidos") {
                     value
                 }
-                v_mffecha: metafield(namespace: "upng", key: "fecha-proxima-llegada") {
-                    value
-                }
             }
             compareAtPriceRange {
                 maxVariantPrice {
@@ -178,15 +251,34 @@ function buildCollectionQuery(collectionId, productMetafields, variantMetafields
   `;
 }
 
+function extractMetafieldsFromObject(obj) {
+  return Object.entries(obj)
+    .filter(([key, _]) => key.startsWith('mf_'))
+    .map(([_, value]) => value);
+}
 
-function metafieldMatches(metafields = [], expected) {
-  return expected.every(({ namespace, key, values }) => {
-    return metafields.some((mf) => {
-      return (
-        mf.namespace === namespace &&
-        mf.key === key &&
-        values.includes(mf.value)
-      );
+function metafieldMatches(metafieldsObj = {}, expected = []) {
+  // Convierte el objeto de metafields a array
+  const metafieldsArray = Object.values(metafieldsObj);
+  if (!metafieldsArray.length) return false;
+
+  const groupedExpected = expected.reduce((acc, { namespace, key, values }) => {
+    const k = `${namespace}.${key}`;
+    if (!acc[k]) {
+      acc[k] = { namespace, key, values: new Set(values) };
+    } else {
+      values.forEach(v => acc[k].values.add(v));
+    }
+    return acc;
+  }, {});
+
+  // Cambié .every a .some para OR entre los filtros esperados
+  return Object.values(groupedExpected).some(({ namespace, key, values }) => {
+    return metafieldsArray.some((mf) => {
+      return mf?.namespace === namespace && mf?.key === key && values.has(mf.value);
     });
   });
 }
+
+
+
