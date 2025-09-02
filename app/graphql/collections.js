@@ -40,3 +40,14 @@ export const GET_COLLECTION_PRODUCTS_PAGE = `#graphql
     }
   }
 `;
+
+export const GET_FILTER_BY_COLLECTION = `#graphql
+  query getFilterByCollection($collectionId: ID!) {
+    collection(id: $collectionId) {
+      metafield(namespace:"tb-filters", key:"config") {
+        jsonValue
+      }
+    }
+  }
+   
+`;

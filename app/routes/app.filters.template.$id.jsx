@@ -18,7 +18,10 @@ export const loader = async ({ request, params }) => {
     initialData = {
         title: "",
         collectionIds: [],
-        filtersIds: []
+        filtersIds: [],
+        includeVendor: true,
+        includeAvailability: true,
+        includePrice: true,
     };
 
   } else  {
@@ -31,6 +34,9 @@ export const loader = async ({ request, params }) => {
       collectionIds: (tpl.collections || []).map((c) => c.id),
       filtersIds: tpl.filtersIds || [],
       active: !!tpl.active,
+      includeVendor: !!tpl.includeVendor,
+      includeAvailability: !!tpl.includeAvailability,
+      includePrice: !!tpl.includePrice,
     };
   }
  

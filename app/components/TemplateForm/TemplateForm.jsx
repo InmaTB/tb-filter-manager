@@ -2,6 +2,7 @@ import { Form, useNavigate } from "@remix-run/react";
 import {
   Banner,
   Card,
+  Checkbox,
   Text,
   Layout,
   PageActions,
@@ -91,6 +92,9 @@ const successBanner = useMemo(() => {
               title: formState.title || '',
               collectionIds: formState.collectionIds || [],
               filtersIds: formState.filtersIds || [],
+              includeVendor: !!formState.includeVendor,
+              includeAvailability: !!formState.includeAvailability,
+              includePrice: !!formState.includePrice,
             })}
           />
           <BlockStack gap="400">
@@ -122,6 +126,23 @@ const successBanner = useMemo(() => {
                           buttonText="Selecciona las colecciones"
                         />
                         <Text variant="headingMd" as="h6">Filtros</Text>
+                        <Text>Marca, disponibilidad y precio:</Text>
+                        <Checkbox
+                          label="Vendor"
+                          checked={!!formState.includeVendor}
+                          onChange={(v) => setField("includeVendor", v)}
+                        />
+                        <Checkbox
+                          label="Disponibilidad"
+                          checked={!!formState.includeAvailability}
+                          onChange={(v) => setField("includeAvailability", v)}
+                        />
+                        <Checkbox
+                          label="Precio"
+                          checked={!!formState.includePrice}
+                          onChange={(v) => setField("includePrice", v)}
+                        />
+                        <Text>Metcampos de producto y variante:</Text>
                         <MetafieldPicker
                             sections={filters}                              
                             value={formState.filtersIds || []}              

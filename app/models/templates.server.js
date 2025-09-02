@@ -116,9 +116,9 @@ function buildSelectedMfQuery(prodDefs = [], varDefs = [], pageSize = 50) {
             variants(first: 100) {
               nodes {
                 id
+                price
                 inventoryQuantity
                 v_mfpermite: metafield(namespace: "upng", key: "permite_pedidos") { value }
-                v_mffecha: metafield(namespace: "upng", key: "fecha-proxima-llegada") { value }
                 ${variantBlock}
               }
             }
@@ -143,10 +143,16 @@ function buildSelectedMfQuery(prodDefs = [], varDefs = [], pageSize = 50) {
  * Calcula el mapa { "ns.key": ["v1","v2", ...] } trayendo SOLO los metafields
  * seleccionados en la template (product + variant), usando la query con aliases.
  */
-async function computeCollectionFiltersMapSelected(graphql, collectionId, prodDefs, varDefs) {
+async function computeCollectionFiltersMapSelected(
+  graphql,
+  collectionId,
+  prodDefs,
+  varDefs,
+  opts = { includeVendor: true, includeAvailability: true, includePrice: false }
+) {
   const hasProd = asArr(prodDefs).length > 0;
   const hasVar = asArr(varDefs).length > 0;
-  if (!hasProd && !hasVar) return [];
+  if (!hasProd && !hasVar && !opts.includeVendor && !opts.includeAvailability && !opts.includePrice) return [];
 
   const { query, prodAlias, varAlias, pageSize } = buildSelectedMfQuery(
     prodDefs.map((d) => ({ namespace: d.namespace, key: d.key })),
@@ -156,26 +162,34 @@ async function computeCollectionFiltersMapSelected(graphql, collectionId, prodDe
 
   const acc = new Map(); //Acumulador de filtros
 
-  // Prepara el filtro para vendor (siempre estará disponible)
-  acc.set("vendor", {
-    key: "vendor",
-    type: "vendor",
-    label: "Vendor",
-    param_name: "filter.p.vendor",
-    presentation: '',
-    active_values: [],
-    values: new Map(),
-  });
+if (opts.includeVendor) {
+    acc.set("vendor", {
+      key: "vendor",
+      type: "vendor",
+      label: "Vendor",
+      param_name: "filter.p.vendor",
+      presentation: "",
+      active_values: [],
+      values: new Map(),
+    });
+  }
 
-  acc.set("availability", {
-    key: "availability",
-    type: "availability",
-    label: "Disponibilidad",
-    param_name: "filter.v.availability",
-    presentation: '',
-    active_values: [],
-    values: new Map(),
-  });
+  if (opts.includeAvailability) {
+    acc.set("availability", {
+      key: "availability",
+      type: "availability",
+      label: "Disponibilidad",
+      param_name: "filter.v.availability",
+      presentation: "",
+      active_values: [],
+      values: new Map(),
+    });
+  }
+
+  // acumuladores de precio (para rango continuo)
+  let minPrice = Number.POSITIVE_INFINITY;
+  let maxPrice = Number.NEGATIVE_INFINITY;
+  let currencyCode = null;
 
   const push = (mf) => {
     if (!mf?.namespace || !mf?.key || !mf?.value || !mf?.id || !mf?.type) return;
@@ -249,49 +263,64 @@ async function computeCollectionFiltersMapSelected(graphql, collectionId, prodDe
         const mf = p?.[alias];
         if (mf && mf.value != null) push(mf);
       }
-      for (const v of asArr(p.variants?.nodes)) {
+      const variants = asArr(p?.variants?.nodes);
+      for (const v of variants) {
         for (const [alias] of varAlias) {
           const mf = v?.[alias];
           if (mf && mf.value != null) push(mf);
         }
       }
 
-      const vendor = String(p?.vendor || "").trim();
-      if (vendor) {
-        const entry = acc.get("vendor");
-        console.log(entry)
-        if (!entry.values.has(vendor)) {
-          console.log(vendor)
-          entry.values.set(vendor, {
-            id: vendor,
-            value: vendor,
-            label: vendor,
-            count: 1,
-            active: false,
-            param_name: entry.param_name,
-          });
-        } else {
-          entry.values.get(vendor).count += 1;
+      // vendor
+      if (opts.includeVendor) {
+        const vendor = String(p?.vendor || "").trim();
+        if (vendor) {
+          const entry = acc.get("vendor");
+          if (!entry.values.has(vendor)) {
+            entry.values.set(vendor, {
+              id: vendor,
+              value: vendor,
+              label: vendor,
+              count: 1,
+              active: false,
+              param_name: entry.param_name,
+            });
+          } else {
+            entry.values.get(vendor).count += 1;
+          }
         }
       }
-      const variants = asArr(p?.variants?.nodes);
-      const hasStock = variants.some(v => Number(v?.inventoryQuantity || 0) > 0);
 
-      const availabilityEntry = acc.get("availability");
-      const availKey = hasStock ? "available" : "unavailable";
-      const availLabel = hasStock ? "Disponible" : "Agotado";
+      // availability
+      if (opts.includeAvailability) {
+        const hasStock = variants.some(v => Number(v?.inventoryQuantity || 0) > 0);
+        const availabilityEntry = acc.get("availability");
+        const availKey = hasStock ? "available" : "unavailable"; // mantenemos estas cadenas
+        const availLabel = hasStock ? "Disponible" : "Agotado";
+        if (!availabilityEntry.values.has(availKey)) {
+          availabilityEntry.values.set(availKey, {
+            id: availKey,
+            value: availKey,
+            label: availLabel,
+            count: 1,
+            active: false,
+            param_name: availabilityEntry.param_name,
+          });
+        } else {
+          availabilityEntry.values.get(availKey).count += 1;
+        }
+      }
 
-      if (!availabilityEntry.values.has(availKey)) {
-        availabilityEntry.values.set(availKey, {
-          id: availKey,
-          value: availKey,
-          label: availLabel,
-          count: 1,
-          active: false,
-          param_name: availabilityEntry.param_name,
-        });
-      } else {
-        availabilityEntry.values.get(availKey).count += 1;
+      // precio (min/max)
+      if (opts.includePrice) {
+        for (const v of variants) {
+          const amt = parseFloat(v?.price?.amount ?? "NaN");
+          if (!isNaN(amt)) {
+            if (amt < minPrice) minPrice = amt;
+            if (amt > maxPrice) maxPrice = amt;
+            if (!currencyCode && v?.price?.currencyCode) currencyCode = v.price.currencyCode;
+          }
+        }
       }
     }
   } while (after);
@@ -377,6 +406,9 @@ async function ensureTemplateDefinition(graphql) {
       { key: "collections", name: "Collections", type: "list.collection_reference" },
       { key: "filters", name: "Filters", type: "json" },
       { key: "active", name: "Active", type: "boolean" },
+      { key: "include_vendor", name: "Include vendor", type: "boolean" },
+      { key: "include_availability", name: "Include availability", type: "boolean" },
+      { key: "include_price", name: "Include price", type: "boolean" },
     ],
     access: {
       admin: "MERCHANT_READ_WRITE",
@@ -414,6 +446,9 @@ function normalizeNode(node) {
     active: toBool(node?.active?.value),
     filtersIds,
     collections,
+    includeVendor: node?.include_vendor ? toBool(node.include_vendor.value) : true,
+    includeAvailability: node?.include_availability ? toBool(node.include_availability.value) : true,
+    includePrice: node?.include_price ? toBool(node.include_price.value) : false,
   };
 }
 
@@ -451,11 +486,17 @@ export async function saveTemplate(graphql, id, templateJSONString) {
   const gid = toMetaobjectGid(id);
 
   const template = JSON.parse(templateJSONString || "{}");
+
+
+  console.log(template)
   const {
     title = "",
     collectionIds = [], // GIDs de Collection
     filtersIds = [], // GIDs de MetafieldDefinition
     active = true,
+    includeVendor = true,
+    includeAvailability = true,
+    includePrice = false,
   } = template;
 
   await ensureTemplateDefinition(graphql);
@@ -466,6 +507,9 @@ export async function saveTemplate(graphql, id, templateJSONString) {
       { key: "collections", value: JSON.stringify(collectionIds) },
       { key: "filters", value: JSON.stringify(filtersIds) },
       { key: "active", value: String(!!active) },
+      { key: "include_vendor", value: String(!!includeVendor) },
+      { key: "include_availability", value: String(!!includeAvailability) },
+      { key: "include_price", value: String(!!includePrice) },
   ]
   ;
 
@@ -513,7 +557,13 @@ export async function saveTemplate(graphql, id, templateJSONString) {
 
   for (const collId of cleanCollectionIds) {
     // Si no hay defs, guarda {} y sigue
-    if (prodDefs.length === 0 && varDefs.length === 0) {
+    if (
+      prodDefs.length === 0 &&
+      varDefs.length === 0 &&
+      !includeVendor &&
+      !includeAvailability &&
+      !includePrice
+    ) {
       await writeCollectionFiltersJson(graphql, collId, {});
       continue;
     }
@@ -523,7 +573,8 @@ export async function saveTemplate(graphql, id, templateJSONString) {
       graphql,
       collId,
       prodDefs,
-      varDefs
+      varDefs,
+      { includeVendor, includeAvailability, includePrice } 
     );
 
     await writeCollectionFiltersJson(graphql, collId, filtersMap);

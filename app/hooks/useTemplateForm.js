@@ -11,6 +11,10 @@ export function useTemplateForm({ initialData } = {}) {
     title: initialData?.title ?? "",
     collectionIds: initialData?.collectionIds ?? [],
     filtersIds: initialData?.filtersIds ?? [],
+    includeVendor: initialData?.includeVendor ?? true,
+    includeAvailability: initialData?.includeAvailability ?? true,
+    includePrice: initialData?.includePrice ?? true,
+
   }));
 
   const setField = useCallback((field, value) => {
@@ -43,6 +47,9 @@ export function useTemplateForm({ initialData } = {}) {
         title: formState.title,
         collectionIds: formState.collectionIds,
         filtersIds: formState.filtersIds,
+        includeVendor: formState.includeVendor,
+        includeAvailability: formState.includeAvailability,
+        includePrice: formState.includePrice,
       }),
     );
 
