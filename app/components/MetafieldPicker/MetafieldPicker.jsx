@@ -74,7 +74,7 @@ export function MetafieldPicker({ sections = [], value = [], onChange }) {
   );
 
   return (
-    <div style={{ height: 340 }}>
+    <div>
       <Autocomplete
         allowMultiple
         options={options}    // [{title, options:[{value,label}]}]

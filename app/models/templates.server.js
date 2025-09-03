@@ -1,3 +1,4 @@
+import { factory } from "typescript";
 import { GET_COLLECTIONS } from "../graphql/collections";
 import { GET_PRODUCT_AND_VARIANT_METAFIELDS, GET_MFDEFS_BY_IDS, METAFIELDS_SET } from "../graphql/metafields";
 import {
@@ -73,6 +74,7 @@ async function getDefinitionsByIds(graphql, filtersIds) {
     key: n.key,
     ownerType: n.ownerType, // "PRODUCT" | "PRODUCTVARIANT"
     type: n.type?.name || null,
+    name: n.name || null,
   }));
 
   return {
@@ -129,14 +131,24 @@ function buildSelectedMfQuery(prodDefs = [], varDefs = [], pageSize = 50) {
   `;
 
   // Mapas alias -> "ns.key"
-  const prodAlias = new Map(
-    prodDefs.map((d, i) => [`p_mf${i}`, `${d.namespace}.${d.key}`])
-  );
-  const varAlias = new Map(
-    varDefs.map((d, i) => [`v_mf${i}`, `${d.namespace}.${d.key}`])
-  );
+  // const prodAlias = new Map(
+  //   prodDefs.map((d, i) => [`p_mf${i}`, `${d.namespace}.${d.key}`])
+  // );
+  // const varAlias = new Map(
+  //   varDefs.map((d, i) => [`v_mf${i}`, `${d.namespace}.${d.key}`])
+  // );
 
-  return { query, prodAlias, varAlias, pageSize };
+  // return { query, prodAlias, varAlias, pageSize };
+    const prodAliasInfo = new Map(prodDefs.map((d, i) => [
+    `p_mf${i}`,
+    { defId: d.id, ns: d.namespace, key: d.key, scope: "PRODUCT", name: d.name }
+  ]));
+  const varAliasInfo = new Map(varDefs.map((d, i) => [
+    `v_mf${i}`,
+    { defId: d.id, ns: d.namespace, key: d.key, scope: "PRODUCTVARIANT", name: d.name }
+  ]));
+
+  return { query, prodAliasInfo, varAliasInfo, pageSize };
 }
 
 /**
@@ -148,228 +160,240 @@ async function computeCollectionFiltersMapSelected(
   collectionId,
   prodDefs,
   varDefs,
-  opts = { includeVendor: true, includeAvailability: true, includePrice: false }
+  opts = { includeVendor: true, includeAvailability: true, includePrice: true },
+  order = [],
+  labels = {}
 ) {
+
+   const asMoneyNumber = (v) => {
+    if (v == null) return null;
+    if (typeof v === "number") return v;
+    if (typeof v === "string" && v.trim() !== "") return Number(v);
+    if (typeof v === "object" && v.amount != null) return Number(v.amount);
+    return null;
+  };
+
+
+  const normalizedOrder = asArr(order).map(normalizeIdToDef);
   const hasProd = asArr(prodDefs).length > 0;
   const hasVar = asArr(varDefs).length > 0;
   if (!hasProd && !hasVar && !opts.includeVendor && !opts.includeAvailability && !opts.includePrice) return [];
 
-  const { query, prodAlias, varAlias, pageSize } = buildSelectedMfQuery(
-    prodDefs.map((d) => ({ namespace: d.namespace, key: d.key })),
-    varDefs.map((d) => ({ namespace: d.namespace, key: d.key })),
+  const { query, prodAliasInfo, varAliasInfo, pageSize } = buildSelectedMfQuery(
+    prodDefs.map(d => ({ id: d.id, namespace: d.namespace, key: d.key, name: d.name })),
+    varDefs.map(d => ({ id: d.id, namespace: d.namespace, key: d.key, name: d.name })),
     50
   );
 
-  const acc = new Map(); //Acumulador de filtros
+  // acc: Map<filterId, entry>
+  const acc = new Map();
+  let globalMaxOfProductMinPrices = null;
 
-if (opts.includeVendor) {
-    acc.set("vendor", {
-      key: "vendor",
-      type: "vendor",
-      label: "Vendor",
-      param_name: "filter.p.vendor",
-      presentation: "",
-      active_values: [],
-      values: new Map(),
-    });
-  }
-
-  if (opts.includeAvailability) {
-    acc.set("availability", {
-      key: "availability",
-      type: "availability",
-      label: "Disponibilidad",
-      param_name: "filter.v.availability",
-      presentation: "",
-      active_values: [],
-      values: new Map(),
-    });
-  }
-
-  // acumuladores de precio (para rango continuo)
-  let minPrice = Number.POSITIVE_INFINITY;
-  let maxPrice = Number.NEGATIVE_INFINITY;
-  let currencyCode = null;
-
-  const push = (mf) => {
-    if (!mf?.namespace || !mf?.key || !mf?.value || !mf?.id || !mf?.type) return;
-
-    const ns = mf.namespace;
-    const key = mf.key;
-    const type = mf.type;
-    const label = mf.definition?.name || `${ns}.${key}`;
-    const ownerType = mf.definition?.ownerType;
-    const compositeKey = `${ns}.${key}`;
-    const active_values = [];
-    let ownerTypeSort = '';
-    if (ownerType === 'PRODUCT') {
-      ownerTypeSort = 'p';
-    } else if (ownerType === 'PRODUCTVARIANT') {
-      ownerTypeSort = 'v';
-    }
-
-    let presentation = ''
-    if (key.toLowerCase().startsWith('color')) {
-      presentation = 'swatch';
-    }    
-      
-    const param_name = `filter.${ownerTypeSort}.${ns}.${key}`;
-
-    if (!acc.has(compositeKey)) {
-      acc.set(compositeKey, {
-        namespace: ns,
-        key,
-        label,
-        type,
-        param_name,
-        presentation,
-        active_values,
-        values: new Map(),
+  // helpers para crear filtro si no existe
+  const ensureFilter = (filterId, { label, namespace, key, type, param_name }) => {
+    if (!acc.has(filterId)) {
+      acc.set(filterId, {
+        _id: filterId,  // ← para ordenar luego
+        filter: {
+          label,
+          namespace,
+          key,
+          type,
+          param_name,
+          values: new Map(), // luego lo convertimos a array ordenado
+        },
       });
     }
+    return acc.get(filterId);
+  };
 
-    const entry = acc.get(compositeKey);
-    for (const val of explodeValue(mf)) {
-      const trimmedVal = String(val || "").trim();
-      if (!trimmedVal) continue;
-      if (!entry.values.has(trimmedVal)) {
-        entry.values.set(trimmedVal, {
-          id: mf.id,
-          value: trimmedVal,
-          label: trimmedVal,
-          count: 1,
-          active: false,
-          param_name,
-        });
-      } else {
-        entry.values.get(trimmedVal).count += 1;
-      }
+  // Estáticos
+  if (opts.includeVendor) {
+    ensureFilter("static:vendor", {
+      label: labels["static:vendor"]?.trim() || "Marca",
+      namespace: null,
+      key: "vendor",
+      type: "vendor",
+      param_name: "filter.p.vendor",
+    });
+  }
+  if (opts.includeAvailability) {
+    ensureFilter("static:availability", {
+      label: labels["static:availability"]?.trim() || "Disponibilidad",
+      namespace: null,
+      key: "availability",
+      type: "availability",
+      param_name: "filter.v.availability",
+    });
+  }
+  if (opts.includePrice) {
+    ensureFilter("static:price", {
+      label: labels["static:price"]?.trim() || "Precio",
+      namespace: null,
+      key: "price",
+      type: "price",
+      param_name: "filter.v.price",
+    });
+  }
+
+  // push de valores en mapas
+  const pushValue = (entry, value) => {
+    const trimmedVal = String(value || "").trim();
+    if (!trimmedVal) return;
+    if (!entry.filter.values.has(trimmedVal)) {
+      entry.filter.values.set(trimmedVal, {
+        id: entry.filter.param_name, // o el id de metafield si lo necesitas por valor
+        value: trimmedVal,
+        label: trimmedVal,
+        count: 1,
+        active: false,
+        param_name: entry.filter.param_name,
+      });
+    } else {
+      entry.filter.values.get(trimmedVal).count += 1;
     }
   };
 
-
   let after = null;
   do {
-    const resp = await graphql(query, {
-      variables: { collectionId, first: pageSize, after },
-    });
+    const resp = await graphql(query, { variables: { collectionId, first: pageSize, after } });
     const json = await resp.json();
     const products = json?.data?.collection?.products;
     const pageInfo = products?.pageInfo || {};
     after = pageInfo?.hasNextPage ? pageInfo.endCursor : null;
 
     for (const p of asArr(products?.nodes)) {
-      for (const [alias] of prodAlias) {
+      let productMinVariantPrice = null;
+      // PRODUCT metafields por alias
+      for (const [alias, info] of prodAliasInfo) {
         const mf = p?.[alias];
-        if (mf && mf.value != null) push(mf);
+        if (mf && mf.value != null) {
+          const filterId = `mfdef:${info.defId}`;
+          const labelBase = info.name || `${mf.namespace}.${mf.key}`;
+          const labelOver = getLabelOverride(filterId, labels);
+          const entry = ensureFilter(filterId, {
+            label: labelOver || labelBase,
+            namespace: mf.namespace,
+            key: mf.key,
+            type: mf.type,
+            param_name: `filter.p.${mf.namespace}.${mf.key}`,
+          });
+          for (const val of explodeValue(mf)) pushValue(entry, val);
+        }
       }
+
+      // VARIANT metafields por alias
       const variants = asArr(p?.variants?.nodes);
       for (const v of variants) {
-        for (const [alias] of varAlias) {
+        const n = asMoneyNumber(v?.price);
+        if (n != null && !Number.isNaN(n)) {
+          productMinVariantPrice = (productMinVariantPrice == null) ? n : Math.min(productMinVariantPrice, n);
+        }
+        for (const [alias, info] of varAliasInfo) {
           const mf = v?.[alias];
-          if (mf && mf.value != null) push(mf);
+          if (mf && mf.value != null) {
+            const filterId = `mfdef:${info.defId}`;
+            const labelBase = info.name || `${mf.namespace}.${mf.key}`;
+            const labelOver = getLabelOverride(filterId, labels);
+            const entry = ensureFilter(filterId, {
+              label: labelOver || labelBase,
+              namespace: mf.namespace,
+              key: mf.key,
+              type: mf.type,
+              param_name: `filter.v.${mf.namespace}.${mf.key}`,
+            });
+            for (const val of explodeValue(mf)) pushValue(entry, val);
+          }
         }
       }
+      
+      // Actualiza el global con el mínimo de este producto
+      if (productMinVariantPrice != null) {
+        globalMaxOfProductMinPrices =
+          (globalMaxOfProductMinPrices == null)
+            ? productMinVariantPrice
+            : Math.max(globalMaxOfProductMinPrices, productMinVariantPrice);
+      }
 
-      // vendor
+      // Vendor
       if (opts.includeVendor) {
         const vendor = String(p?.vendor || "").trim();
-        if (vendor) {
-          const entry = acc.get("vendor");
-          if (!entry.values.has(vendor)) {
-            entry.values.set(vendor, {
-              id: vendor,
-              value: vendor,
-              label: vendor,
-              count: 1,
-              active: false,
-              param_name: entry.param_name,
-            });
-          } else {
-            entry.values.get(vendor).count += 1;
-          }
-        }
+        if (vendor) pushValue(acc.get("static:vendor"), vendor);
       }
 
-      // availability
+      // Availability
       if (opts.includeAvailability) {
         const hasStock = variants.some(v => Number(v?.inventoryQuantity || 0) > 0);
-        const availabilityEntry = acc.get("availability");
-        const availKey = hasStock ? "available" : "unavailable"; // mantenemos estas cadenas
-        const availLabel = hasStock ? "Disponible" : "Agotado";
-        if (!availabilityEntry.values.has(availKey)) {
-          availabilityEntry.values.set(availKey, {
-            id: availKey,
-            value: availKey,
-            label: availLabel,
-            count: 1,
-            active: false,
-            param_name: availabilityEntry.param_name,
-          });
-        } else {
-          availabilityEntry.values.get(availKey).count += 1;
-        }
+        pushValue(acc.get("static:availability"), hasStock ? "available" : "unavailable");
       }
 
-      // precio (min/max)
-      if (opts.includePrice) {
-        for (const v of variants) {
-          const amt = parseFloat(v?.price?.amount ?? "NaN");
-          if (!isNaN(amt)) {
-            if (amt < minPrice) minPrice = amt;
-            if (amt > maxPrice) maxPrice = amt;
-            if (!currencyCode && v?.price?.currencyCode) currencyCode = v.price.currencyCode;
-          }
-        }
-      }
+      // Price (si quieres seguir guardando rangos, aquí podrías calcular min/max)
     }
   } while (after);
 
-  const out = [];
-  for (const { namespace, key, label, type, param_name, presentation, active_values, values } of acc.values()) {
-    const sortedEntries = uniqSorted([...values.values()].map(v => v.value)).map(val => {
-      const entry = values.get(val);
-      return {
-        id: entry?.id,
-        value: val,
-        label: val,
-        count: entry?.count ?? 0,
+  // 👉 Inyecta el valor especial "max-price" en el filtro de precio
+  if (opts.includePrice) {
+    const priceEntry = acc.get("static:price");
+    if (priceEntry) {
+      const maxPrice = globalMaxOfProductMinPrices ?? 0;
+      // guardamos 'max-price' como value y el número en label
+      priceEntry.filter.values.set("max-price", {
+        id: priceEntry.filter.param_name,
+        value: "max-price",
+        label: String(maxPrice),
+        count: 1,
         active: false,
-        param_name
-      };
-    });
-
-    out.push({
-      filter: {
-        label,
-        namespace,
-        key,
-        type,
-        param_name,
-        presentation,
-        active_values,
-        values: sortedEntries,
-      },
-    });
+        param_name: priceEntry.filter.param_name,
+      });
+    }
   }
 
-  console.log(out)
+  // Convertimos los mapas de values a arrays ordenados alfabéticamente (local es)
+  const toSortedArray = (map) =>
+    uniqSorted([...map.keys()]).map(val => map.get(val));
 
-  return out;
+  const all = [...acc.values()].map(e => ({
+    filter: {
+      ...e.filter,
+      // APLICA label override final por si cambia antes de escribir
+      label: getLabelOverride(e._id, labels) || e.filter.label,
+      values: toSortedArray(e.filter.values),
+    },
+    _id: e._id, // mantenemos para ordenar y luego lo quitamos
+  }));
+
+  // Orden final:
+  // - Primero los ids presentes en `order` en ese orden
+  // - Luego el resto (los que no estaban en order), en su orden actual
+  const byId = new Map(all.map(x => [x._id, x]));
+  const ordered = [];
+  const seen = new Set();
+
+  for (const id of normalizedOrder) {
+    const x = byId.get(id);
+    if (x) { ordered.push(x); seen.add(id); }
+  }
+  for (const x of all) {
+    if (!seen.has(x._id)) ordered.push(x);
+  }
+
+  // Limpia el _id antes de devolver
+  return ordered.map(({ _id, ...rest }) => rest);
 }
 
 
+
 // Escribe el JSON en el metafield de la colección
-async function writeCollectionFiltersJson(graphql, collectionId, filtersMap) {
+async function writeCollectionFiltersJson(graphql, collectionId, filtersArray) {
   const resp = await graphql(METAFIELDS_SET, {
     variables: {
       metafields: [
         {
           ownerId: collectionId,
           namespace: COLLECTION_FILTERS_NS,
-          key: COLLECTION_FILTERS_KEY, // "config"
+          key: COLLECTION_FILTERS_KEY,
           type: "json",
-          value: JSON.stringify(filtersMap || {}),
+          value: JSON.stringify(filtersArray || []),
         },
       ],
     },
@@ -383,17 +407,22 @@ async function writeCollectionFiltersJson(graphql, collectionId, filtersMap) {
   }
 }
 
-function mapDefsToOptions(defs) {
+function mapDefsToOptions(defs, scope) {
   return (defs ?? []).map((d) => ({
     value: d.id,
     label: `${d.name} — ${d.namespace}.${d.key}`,
+    nameMF: d.name,
+    source: `${d.namespace}.${d.key}`,
+    namespace: d.namespace,
+    key: d.key,
+    scope
   }));
 }
 
 function buildSectionedOptions(productDefs, variantDefs) {
   return [
-    { title: "Product", options: mapDefsToOptions(productDefs, "PRODUCT") },
-    { title: "Variant", options: mapDefsToOptions(variantDefs, "PRODUCTVARIANT") },
+    { title: "Product", options: mapDefsToOptions(productDefs, "P") },
+    { title: "Variant", options: mapDefsToOptions(variantDefs, "V") },
   ];
 }
 
@@ -409,6 +438,8 @@ async function ensureTemplateDefinition(graphql) {
       { key: "include_vendor", name: "Include vendor", type: "boolean" },
       { key: "include_availability", name: "Include availability", type: "boolean" },
       { key: "include_price", name: "Include price", type: "boolean" },
+      { key: "filters_order", name: "Filters order", type: "json" },
+      { key: "filters_labels", name: "Filters labels", type: "json" },
     ],
     access: {
       admin: "MERCHANT_READ_WRITE",
@@ -429,34 +460,74 @@ async function ensureTemplateDefinition(graphql) {
 }
 
 function normalizeNode(node) {
+  // 1) Campos base
   let filtersIds = [];
   try {
     filtersIds = JSON.parse(node?.filters?.value ?? "[]");
   } catch {}
+
+  // 2) NUEVOS: declara SIEMPRE antes de usarlos
+  let filtersOrder = [];
+  try {
+    filtersOrder = JSON.parse(node?.filters_order?.value ?? "[]");
+  } catch {}
+
+  let filtersLabels = {};
+  try {
+    filtersLabels = JSON.parse(node?.filters_labels?.value ?? "{}");
+  } catch {}
+
+
+
+  // 3) Colecciones
   const collections =
     node?.collections?.references?.nodes?.map((c) => ({
       id: c.id,
       title: c.title,
       handle: c.handle,
     })) ?? [];
+
+    const includeVendor = node?.include_vendor ? toBool(node.include_vendor.value) : false;
+    const includeAvailability =  node?.include_availability ? toBool(node.include_availability.value) : false;
+    const includePrice =  node?.include_price ? toBool(node.include_price.value) : false;
+
+  // 4) Return normalizado
   return {
     id: node.id,
     handle: node.handle,
     title: node?.title?.value ?? null,
     active: toBool(node?.active?.value),
     filtersIds,
+    filtersOrder,
+    filtersLabels,
     collections,
-    includeVendor: node?.include_vendor ? toBool(node.include_vendor.value) : true,
-    includeAvailability: node?.include_availability ? toBool(node.include_availability.value) : true,
-    includePrice: node?.include_price ? toBool(node.include_price.value) : false,
+    includeVendor,
+    includeAvailability,
+    includePrice,
   };
 }
+
 
 const toMetaobjectGid = (maybeId) => {
   const s = String(maybeId ?? '');
   if (!s) return s;
   if (s === '0') return s; // sentinel de "crear"
   return s.startsWith('gid://shopify/Metaobject/') ? s : `gid://shopify/Metaobject/${s}`;
+};
+
+const normalizeIdToDef = (id) =>
+  typeof id === "string" && id.startsWith("mf:")
+    ? id.replace("mf:", "mfdef:")
+    : id;
+
+const getLabelOverride = (filterId, labels) => {
+  if (!labels) return "";
+  if (labels[filterId]?.trim()) return labels[filterId].trim();
+  if (filterId.startsWith("mfdef:")) {
+    const alt = "mf:" + filterId.slice("mfdef:".length);
+    if (labels[alt]?.trim()) return labels[alt].trim();
+  }
+  return "";
 };
 
 // ================================================
@@ -471,24 +542,22 @@ export async function getTemplates(graphql, opts = {}) {
     const q = await graphql(GET_TEMPLATE_BY_ID, { variables: { id: gid } });
     const jq = await q.json();
     const node = jq?.data?.metaobject;
-    return node ? [normalizeNode(node)] : [];
+    const normalizedNode = normalizeNode(node);
+    return node ? [normalizedNode] : [];
   }
 
   const q = await graphql(LIST_TEMPLATES, { variables: { first, after } });
   const jq = await q.json();
   const edges = jq?.data?.metaobjects?.edges || [];
-  return edges.map(({ node }) => normalizeNode(node));
+  const result = edges.map(({ node }) => normalizeNode(node));
+  return result;
 }
 
 export async function saveTemplate(graphql, id, templateJSONString) {
-
-  console.log('id', id)
   const gid = toMetaobjectGid(id);
 
   const template = JSON.parse(templateJSONString || "{}");
 
-
-  console.log(template)
   const {
     title = "",
     collectionIds = [], // GIDs de Collection
@@ -496,20 +565,24 @@ export async function saveTemplate(graphql, id, templateJSONString) {
     active = true,
     includeVendor = true,
     includeAvailability = true,
-    includePrice = false,
+    includePrice = true,
+    filtersOrder = [],
+    filtersLabels = {},
   } = template;
 
   await ensureTemplateDefinition(graphql);
 
   // --- upsert/update del metaobjeto (tal como tenías) ---
   const fields = [
-      { key: "title", value: String(title) },
-      { key: "collections", value: JSON.stringify(collectionIds) },
-      { key: "filters", value: JSON.stringify(filtersIds) },
-      { key: "active", value: String(!!active) },
-      { key: "include_vendor", value: String(!!includeVendor) },
-      { key: "include_availability", value: String(!!includeAvailability) },
-      { key: "include_price", value: String(!!includePrice) },
+    { key: "title", value: String(title) },
+    { key: "collections", value: JSON.stringify(collectionIds) },
+    { key: "filters", value: JSON.stringify(filtersIds) },
+    { key: "active", value: String(!!active) },
+    { key: "include_vendor", value: String(!!includeVendor) },
+    { key: "include_availability", value: String(!!includeAvailability) },
+    { key: "include_price", value: String(!!includePrice) },
+    { key: "filters_order", value: JSON.stringify(filtersOrder || []) },
+    { key: "filters_labels", value: JSON.stringify(filtersLabels || {}) },
   ]
   ;
 
@@ -569,15 +642,17 @@ export async function saveTemplate(graphql, id, templateJSONString) {
     }
 
     // Usar versión "selected" (solo metafields de template)
-    const filtersMap = await computeCollectionFiltersMapSelected(
-      graphql,
-      collId,
-      prodDefs,
-      varDefs,
-      { includeVendor, includeAvailability, includePrice } 
-    );
+  const filtersArray = await computeCollectionFiltersMapSelected(
+    graphql,
+    collId,
+    prodDefs,
+    varDefs,
+    { includeVendor, includeAvailability, includePrice },
+    filtersOrder || [],
+    filtersLabels || {}
+  );
 
-    await writeCollectionFiltersJson(graphql, collId, filtersMap);
+  await writeCollectionFiltersJson(graphql, collId, filtersArray);
   }
 
   return { success: true, metaobject: upsertedOrUpdated };
@@ -594,6 +669,7 @@ export async function getAllFilters(graphql) {
   const { data } = await res.json();
   const productDefs = data?.product?.nodes ?? [];
   const variantDefs = data?.variant?.nodes ?? [];
+
   return buildSectionedOptions(productDefs, variantDefs);
 }
 

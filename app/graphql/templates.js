@@ -50,7 +50,7 @@ export const LIST_TEMPLATES = `#graphql
   }
 `;
 
-// Una plantilla por ID
+// Una plantilla por ID 
 export const GET_TEMPLATE_BY_ID = `#graphql
   query GetTemplateById($id: ID!) {
     metaobject(id: $id) {
@@ -65,6 +65,11 @@ export const GET_TEMPLATE_BY_ID = `#graphql
           nodes { ... on Collection { id title handle } }
         }
       }
+      include_vendor: field(key: "include_vendor") { value }
+      include_availability: field(key: "include_availability") { value }
+      include_price: field(key: "include_price") { value }
+      filters_order: field(key: "filters_order") { value }
+      filters_labels: field(key: "filters_labels") { value }
     }
   }
 `;

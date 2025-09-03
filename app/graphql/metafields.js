@@ -25,6 +25,7 @@ export const GET_MFDEFS_BY_IDS = `#graphql
     nodes(ids: $ids) {
       ... on MetafieldDefinition {
         id
+        name
         namespace
         key
         ownerType

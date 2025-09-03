@@ -14,7 +14,6 @@ export const loader = async ({ request, params }) => {
   let initialData;
 
   if (params.id === '0') {
-    console.log('new')
     initialData = {
         title: "",
         collectionIds: [],
@@ -22,6 +21,8 @@ export const loader = async ({ request, params }) => {
         includeVendor: true,
         includeAvailability: true,
         includePrice: true,
+        filtersOrder: [],
+        filtersLabels: {}
     };
 
   } else  {
@@ -37,6 +38,8 @@ export const loader = async ({ request, params }) => {
       includeVendor: !!tpl.includeVendor,
       includeAvailability: !!tpl.includeAvailability,
       includePrice: !!tpl.includePrice,
+      filtersOrder: tpl.filtersOrder || [],
+      filtersLabels: tpl.filtersLabels || {},
     };
   }
  

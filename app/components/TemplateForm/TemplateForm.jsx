@@ -16,6 +16,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useTemplateForm } from "../../hooks/useTemplateForm";
 import { CollectionPicker } from "../CollectionPicker/CollectionPicker";
 import { MetafieldPicker } from "../MetafieldPicker/MetafieldPicker";
+import { FilterTable } from "../FilterTable/FilterTable";
 
 export function TemplateForm({
   initialData,
@@ -81,6 +82,16 @@ const successBanner = useMemo(() => {
     [setField],
   );
 
+  
+  const handleLabelsChange = useCallback((labelsMap) => {
+    setField("filtersLabels", labelsMap);
+  }, [setField]);
+
+  const handleOrderChange = useCallback((orderedIds) => {
+    setField("filtersOrder", orderedIds);
+  }, [setField]);
+
+
   return (
     <Layout>
       <Layout.Section>
@@ -95,6 +106,8 @@ const successBanner = useMemo(() => {
               includeVendor: !!formState.includeVendor,
               includeAvailability: !!formState.includeAvailability,
               includePrice: !!formState.includePrice,
+              filtersOrder: formState.filtersOrder || [],
+              filtersLabels: formState.filtersLabels || {}, 
             })}
           />
           <BlockStack gap="400">
@@ -129,18 +142,18 @@ const successBanner = useMemo(() => {
                         <Text>Marca, disponibilidad y precio:</Text>
                         <Checkbox
                           label="Vendor"
-                          checked={!!formState.includeVendor}
-                          onChange={(v) => setField("includeVendor", v)}
+                          checked={Boolean(formState.includeVendor)}
+                          onChange={(checked) => setField("includeVendor", Boolean(checked))}
                         />
                         <Checkbox
                           label="Disponibilidad"
-                          checked={!!formState.includeAvailability}
-                          onChange={(v) => setField("includeAvailability", v)}
+                          checked={Boolean(formState.includeAvailability)}
+                          onChange={(checked) => setField("includeAvailability", Boolean(checked))}
                         />
                         <Checkbox
                           label="Precio"
-                          checked={!!formState.includePrice}
-                          onChange={(v) => setField("includePrice", v)}
+                          checked={Boolean(formState.includePrice)}
+                          onChange={(checked) => setField("includePrice", Boolean(checked))}
                         />
                         <Text>Metcampos de producto y variante:</Text>
                         <MetafieldPicker
@@ -148,6 +161,17 @@ const successBanner = useMemo(() => {
                             value={formState.filtersIds || []}              
                             onChange={(next) => setField('filtersIds', next)} 
                             />
+                        <FilterTable 
+                          vendor={!!formState.includeVendor || false}
+                          availability={!!formState.includeAvailability  || false}
+                          price={!!formState.includePrice || false}
+                          metafields={filters}
+                          selectedMetafields= {formState.filtersIds || []}
+                          onChangeOrder={handleOrderChange}
+                          onChangeLabels={handleLabelsChange}
+                          initialOrder={formState.filtersOrder || []}
+                          initialLabels={formState.filtersLabels || {}}
+                          />
                       </>
                   </BlockStack>
                 </BlockStack>
