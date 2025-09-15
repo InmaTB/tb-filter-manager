@@ -2,29 +2,28 @@
 
 client_id = "459307d96259a1fe0fd3c8235f253c7b"
 name = "tb-filter-manager"
-handle = "tb-filter-manager"
 application_url = "https://tb-filter-manager-e6ad2edfd028.herokuapp.com"
 embedded = true
+handle = "tb-filter-manager"
 
 [build]
+automatically_update_urls_on_dev = false
 include_config_on_deploy = true
-automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2025-07"
 
   [[webhooks.subscriptions]]
-
-  topics = [ "app/uninstalled" ]
-  uri = "/webhooks/app/uninstalled"
-
-  [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,read_metaobjects,unauthenticated_read_product_listings,write_metaobjects,write_products, write_metaobject_definitions"
+scopes = "read_metaobjects,read_products,unauthenticated_read_product_listings,write_metaobject_definitions,write_metaobjects,write_products"
 
 [auth]
 redirect_urls = [
