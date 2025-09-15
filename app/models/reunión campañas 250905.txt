@@ -1,4 +1,0 @@
-Jerarquización de los productos
-Añadir  atributos en feed.
-Media de rentabilidad por productos de categorías.
-Feeds para bing
