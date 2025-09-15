@@ -585,6 +585,7 @@ async function computeAvailableFiltersValuesGlobal({
   return out;
 }
 
+
 // ============================
 // Entry point
 // ============================
