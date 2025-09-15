@@ -1,0 +1,5 @@
+build:
+  docker:
+    web: Dockerfile
+  config:
+    SHOPFIY_APP_KEY: af42f907655f0d8901703ca2124c78dd
