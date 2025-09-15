@@ -6,19 +6,18 @@ import { authenticate } from "../shopify.server";
 
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 
-// ✅ Unifica los estilos aquí
-export const links = () => [
-  { rel: "stylesheet", href: polarisStyles },
-  
-];
+export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
+
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
 
 export default function App() {
   const { apiKey } = useLoaderData();
+
+  console.log('aplikey', apiKey)
 
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
