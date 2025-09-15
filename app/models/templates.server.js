@@ -1,4 +1,3 @@
-import { factory } from "typescript";
 import { GET_COLLECTIONS } from "../graphql/collections";
 import { GET_PRODUCT_AND_VARIANT_METAFIELDS, GET_MFDEFS_BY_IDS, METAFIELDS_SET } from "../graphql/metafields";
 import {
